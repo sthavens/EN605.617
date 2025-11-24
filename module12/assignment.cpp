@@ -23,15 +23,18 @@ cl_program CreateProgram(cl_context context, cl_device_id deviceID, const char* 
 void Cleanup(cl_context context, cl_command_queue commandQueue, cl_program program, float* A, float* B, float* C, cl_kernel kernel);
 void RandomFill(float* matrix, int rows, int cols);
 void WriteMatrixToFile(const char* filename, float* matrix, int rows, int cols);
+void TransposeMatrix(float* input, float* output, int rows, int cols);
 
 int main(int argc, char** argv)
 {
 	float* A = (float*) malloc(sizeof(float) * M * K);
 	float* B = (float*) malloc(sizeof(float) * K * N);
+	float* B_T = (float*) malloc(sizeof(float) * N * K);
 	float* C = (float*) malloc(sizeof(float) * M * N);
 	
 	RandomFill(A, M, K);
 	RandomFill(B, K, N);
+	TransposeMatrix(B, B_T, K, N);
 
 	cl_device_id deviceID;
 	cl_program program;
@@ -92,7 +95,7 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
-	err = clEnqueueWriteBuffer(commandQueue, bufferB, CL_TRUE, 0, sizeof(float) * K * N, B, 0, NULL, NULL);
+	err = clEnqueueWriteBuffer(commandQueue, bufferB, CL_TRUE, 0, sizeof(float) * K * N, B_T, 0, NULL, NULL);
 
 	if (err != CL_SUCCESS) {
 		std::cerr << "Failed to write data to buffer B." << std::endl;
@@ -232,9 +235,9 @@ int main(int argc, char** argv)
 			int vecWidth = 4; // Using float4
 
 			size_t local[2] = {TILE_M, TILE_N / vecWidth};
-			size_t global[2] = {M, N / vecWidth};
+			size_t global[2] = {TILE_M, TILE_N / vecWidth};
 
-			int pitchB = TILE_N;
+			int N_pitch = TILE_N;
 
 			cl_event event;
 			cl_ulong timeStart;
@@ -244,14 +247,11 @@ int main(int argc, char** argv)
 			clSetKernelArg(kernel, 0, sizeof(cl_mem), &subA);
 			clSetKernelArg(kernel, 1, sizeof(cl_mem), &subB);
 			clSetKernelArg(kernel, 2, sizeof(cl_mem), &subC);
-			clSetKernelArg(kernel, 3, sizeof(int), &m);
-			clSetKernelArg(kernel, 4, sizeof(int), &n);
-			clSetKernelArg(kernel, 5, sizeof(int), &k);
-			clSetKernelArg(kernel, 6, sizeof(float) * 4 * TILE_M * (TILE_K / vecWidth), NULL);
-			clSetKernelArg(kernel, 7, sizeof(float) * 4 * (TILE_N / vecWidth) * (TILE_K / vecWidth), NULL);
-			clSetKernelArg(kernel, 8, sizeof(int), &tileRow);
-			clSetKernelArg(kernel, 9, sizeof(int), &tileColumn);
-			clSetKernelArg(kernel, 10, sizeof(int), &pitchB);
+			clSetKernelArg(kernel, 3, sizeof(int), &k);  // full inner dimension
+			clSetKernelArg(kernel, 4, sizeof(float) * 4 * TILE_M * (TILE_K / vecWidth), NULL); // local A tile
+			clSetKernelArg(kernel, 5, sizeof(float) * 4 * (TILE_N / vecWidth) * (TILE_K / vecWidth), NULL); // local B tile
+			clSetKernelArg(kernel, 6, sizeof(int), &N_pitch);
+
 
 			clEnqueueNDRangeKernel(commandQueue, kernel, 2, NULL, global, local, 0, NULL, &event);
 
@@ -437,4 +437,13 @@ void WriteMatrixToFile(const char* filename, float* matrix, int rows, int cols) 
     }
 
     outFile.close();
+}
+
+void TransposeMatrix(float* input, float* output, int rows, int cols) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            // input: rows x cols -> output: cols x rows
+            output[j * rows + i] = input[i * cols + j];
+        }
+    }
 }

@@ -1,45 +1,41 @@
 __kernel void matrixMultiplyTiled(
-    __global const float* A,
-    __global const float* B,
-    __global float* C,
-    const int M,
-    const int N,
-    const int K,
+    __global const float* A,          
+    __global const float* B,          
+    __global float* C,                
+    const int K,                      
     __local float4* tileA_vec,
     __local float4* tileB_vec,
-    const int rowOffset,
-    const int columnOffset,
-    const int pitchB
+    const int N_pitch
 ) {
-    int row = get_global_id(0) + rowOffset;
-    int column = get_global_id(1) * 4 + columnOffset;
+    int localRow = get_local_id(0);   
+    int localColumn = get_local_id(1);   
+    int vecWidth = 4;               
+    int tile_k = 32;
 
-    int localRow = get_local_id(0);
-    int localColumn = get_local_id(1);
+    int tileM = get_local_size(0);
+    int tileN = get_local_size(1) * vecWidth;
 
-    int tileSize = get_local_size(0); // assuming a square tile in this case
-    int vecWidth = 4;
+    float4 sum = (float4)(0.0f);
 
-    float4 sum = (float4) 0.0f;
+    for (int t = 0; t < K; t += tile_k) {
+        // Load tiles into local memory
+        tileA_vec[localRow * (tile_k/vecWidth) + localColumn] = 
+            vload4(0, &A[localRow * K + t + localColumn * vecWidth]);
 
-    for (int t = 0; t < K; t += tileSize) {
+        tileB_vec[localRow * (tile_k/vecWidth) + localColumn] = 
+            vload4(0, &B[localRow * K * t + localColumn * vecWidth]);
 
-        tileA_vec[localRow * (tileSize/vecWidth) + localColumn / vecWidth] = vload4(0, &A[row * K + t + localColumn * vecWidth]);
-
-        tileB_vec[localRow * (tileSize/vecWidth) + localColumn/vecWidth] = vload4(0, &B[(t + localRow) * pitchB + localColumn * vecWidth]);
-
-
-        // Prevents advancement until all threads have finished loading
         barrier(CLK_LOCAL_MEM_FENCE);
 
-        for (int k = 0; k < tileSize / vecWidth; ++k) {
-            sum += tileA_vec[localRow * (tileSize/vecWidth) + k] * tileB_vec[k * (tileSize/vecWidth) + localColumn / vecWidth];
+        // Multiply tiles
+        for (int k = 0; k < tile_k / vecWidth; ++k) {
+            sum += tileA_vec[localRow * (tile_k/vecWidth) + k] *
+                   tileB_vec[localColumn * (tile_k / vecWidth) + k];
         }
 
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 
-    if (row < M && column < N) {
-        vstore4(sum, 0, &C[row * N + column]);
-    }
+    // Write result to sub-buffer (local indexing is enough)
+    vstore4(sum, 0, &C[localRow * N_pitch + localColumn * vecWidth]);
 }
